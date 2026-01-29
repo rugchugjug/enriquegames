@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Factory Puzzle RTS</title>
+<style>
+body{margin:0;overflow:hidden;background:#111}
+canvas{display:block}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+canvas.width=innerWidth;
+canvas.height=innerHeight;
+
+/* ========= HELPERS ========= */
+const rand=n=>Math.floor(Math.random()*n);
+const keyOf=(x,y)=>x+","+y;
+
+/* ========= WORLD ========= */
+const regionSize=192;
+let regionCount=9;
+const tileSize=32;
+
+// Regions in a map for flexible coordinates
+let regions=new Map();
+class Region{
+ constructor(x,y){this.x=x;this.y=y;this.type=rand(4);this.rot=0}
+ rotate(){this.rot=(this.rot+1)%4}
+}
+function addRegion(x,y){
+ const key=x+","+y;
+ if(!regions.has(key)) regions.set(key,new Region(x,y));
+}
+// Initial grid
+for(let y=0;y<regionCount;y++)for(let x=0;x<regionCount;x++)addRegion(x,y);
+
+/* ========= CAMERA ========= */
+let camera={x:0,y:0,zoom:1,speed:25};
+let keys={};
+addEventListener("keydown",e=>keys[e.key]=true);
+addEventListener("keyup",e=>keys[e.key]=false);
+
+canvas.addEventListener("wheel",e=>{
+ const old=camera.zoom;
+ camera.zoom=Math.min(2.5,Math.max(0.4,camera.zoom-e.deltaY*0.001));
+ camera.x+=(e.clientX/old-e.clientX/camera.zoom);
+ camera.y+=(e.clientY/old-e.clientY/camera.zoom);
+});
+
+/* ========= FACTORY ========= */
+let ores=[],miners=[],belts=[],smelters=[],houses=[],items=[],tracks=[];
+const at=(arr,x,y)=>arr.find(o=>o.x===x&&o.y===y);
+
+/* ========= BUILD MODES ========= */
+let buildMode=0,beltDir=0;
+addEventListener("keydown",e=>{
+ if(e.key==="1")buildMode=1;
+ if(e.key==="2")buildMode=2;
+ if(e.key==="3")buildMode=3;
+ if(e.key==="4")buildMode=4;
+ if(e.key==="6")buildMode=6;
+ if(e.key==="7")buildMode=7;
+ if(e.key==="8")buildMode=8;
+ if(e.key==="9")buildMode=9;
+ if(e.key==="0")buildMode=0;
+ if(e.key==="r")beltDir=(beltDir+1)%4;
+});
+
+/* ========= MOUSE BUILD ========= */
+let mouseDown=false;
+canvas.onmousedown=()=>mouseDown=true;
+canvas.onmouseup=()=>mouseDown=false;
+
+canvas.onmousemove=e=>{
+ if(!mouseDown)return;
+ handleClick(e,true);
+};
+canvas.onclick=e=>handleClick(e,false);
+
+function handleClick(e,drag){
+ let wx=e.clientX/camera.zoom+camera.x;
+ let wy=e.clientY/camera.zoom+camera.y;
+ let rx=Math.floor(wx/regionSize);
+ let ry=Math.floor(wy/regionSize);
+ let x=Math.floor(wx/tileSize)*tileSize;
+ let y=Math.floor(wy/tileSize)*tileSize;
+
+ // Rotate region if clicking inside
+ let rKey=rx+","+ry;
+ if(regions.has(rKey)) regions.get(rKey).rotate();
+
+ // Delete mode
+ if(buildMode===4){
+  miners=miners.filter(o=>!(o.x===x&&o.y===y));
+  belts=belts.filter(o=>!(o.x===x&&o.y===y));
+  smelters=smelters.filter(o=>!(o.x===x&&o.y===y));
+  houses=houses.filter(o=>!(o.x===x&&o.y===y));
+  tracks=tracks.filter(o=>!(o.x===x&&o.y===y));
+  ores=ores.filter(o=>!(o.x===x&&o.y===y));
+  return;
+ }
+
+ // Upgrade
+ if(buildMode===7){
+  let b=at(miners,x,y)||at(smelters,x,y)||at(houses,x,y);
+  if(b)b.level=(b.level||1)+1;
+  return;
+ }
+
+ // Add buildings / belts / ore / track
+ if(buildMode===1&&(!drag||!at(miners,x,y))) miners.push({x,y,timer:0,level:1});
+ if(buildMode===2&&!at(belts,x,y)) belts.push({x,y,dir:beltDir});
+ if(buildMode===3&&!at(smelters,x,y)) smelters.push({x,y,inv:0,level:1});
+ if(buildMode===6&&!at(houses,x,y)) houses.push({x,y,level:1});
+ if(buildMode===8&&!at(ores,x,y)) ores.push({x,y});
+ if(buildMode===9&&!at(tracks,x,y)) tracks.push({x,y});
+}
+
+// Add region on double click
+canvas.addEventListener("dblclick",e=>{
+ let wx=e.clientX/camera.zoom+camera.x;
+ let wy=e.clientY/camera.zoom+camera.y;
+ let rx=Math.floor(wx/regionSize);
+ let ry=Math.floor(wy/regionSize);
+ addRegion(rx,ry);
+});
+
+/* ========= SIM ========= */
+function update(){
+ if(keys.w)camera.y-=camera.speed;
+ if(keys.s)camera.y+=camera.speed;
+ if(keys.a)camera.x-=camera.speed;
+ if(keys.d)camera.x+=camera.speed;
+
+ miners.forEach(m=>{
+  m.timer++;
+  if(m.timer>100/m.level){
+   m.timer=0;
+   items.push({x:m.x+16,y:m.y+16,type:"ore"});
+  }
+ });
+
+ items.forEach(it=>{
+  let tx=Math.floor(it.x/tileSize)*tileSize;
+  let ty=Math.floor(it.y/tileSize)*tileSize;
+  let b=at(belts,tx,ty);
+  if(b){
+   if(b.dir===0)it.x+=2;
+   if(b.dir===1)it.y+=2;
+   if(b.dir===2)it.x-=2;
+   if(b.dir===3)it.y-=2;
+  }
+  let s=at(smelters,tx,ty);
+  if(s&&it.type==="ore"){
+   s.inv++;it.remove=true;
+   items.push({x:s.x+16,y:s.y+16,type:"plate"});
+  }
+ });
+ items=items.filter(i=>!i.remove);
+}
+
+/* ========= DRAW ========= */
+function draw(){
+ ctx.setTransform(camera.zoom,0,0,camera.zoom,-camera.x*camera.zoom,-camera.y*camera.zoom);
+ ctx.clearRect(camera.x,camera.y,canvas.width/camera.zoom,canvas.height/camera.zoom);
+
+ // Draw regions
+ regions.forEach(r=>{
+  ctx.strokeStyle="#333";
+  ctx.strokeRect(r.x*regionSize,r.y*regionSize,regionSize,regionSize);
+ });
+
+ // Draw everything
+ ores.forEach(o=>{ctx.fillStyle="darkred";ctx.fillRect(o.x,o.y,18,18)});
+ miners.forEach(m=>{ctx.fillStyle="orange";ctx.fillRect(m.x,m.y,28+m.level*2,28+m.level*2)});
+ belts.forEach(b=>{
+  ctx.fillStyle="#444";ctx.fillRect(b.x,b.y,28,28);
+  ctx.fillStyle="white";ctx.fillText(["→","↓","←","↑"][b.dir],b.x+8,b.y+20);
+ });
+ smelters.forEach(s=>{
+  ctx.fillStyle="purple";ctx.fillRect(s.x,s.y,28+s.level*2,28+s.level*2);
+  ctx.fillStyle="white";ctx.fillText(s.inv,s.x+8,s.y+18);
+ });
+ houses.forEach(h=>{
+  ctx.fillStyle="skyblue";ctx.fillRect(h.x,h.y,28+h.level*2,28+h.level*2);
+ });
+ tracks.forEach(t=>{
+  ctx.fillStyle="brown";ctx.fillRect(t.x,t.y,28,28);
+ });
+ items.forEach(it=>{
+  ctx.fillStyle=it.type==="ore"?"cyan":"gold";
+  ctx.beginPath();ctx.arc(it.x,it.y,5,0,7);ctx.fill();
+ });
+
+ ctx.setTransform(1,0,0,1,0,0);
+ ctx.fillStyle="white";
+ ctx.fillText("Mode: "+["None","Miner","Belt","Smelter","Delete","","House","Upgrade","Ore","Track"][buildMode],20,20);
+}
+
+/* ========= LOOP ========= */
+function loop(){update();draw();requestAnimationFrame(loop)}
+loop();
+</script>
+</body>
+</html>
